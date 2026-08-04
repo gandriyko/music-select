@@ -11,8 +11,8 @@ import argparse
 import curses
 import json
 import os
-import signal
 import shutil
+import signal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -105,7 +105,16 @@ class AudioPlayer:
     def play(self, path: Path, start: float) -> None:
         self.stop()
         self.process = subprocess.Popen(
-            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "-ss", str(max(0.0, start)), str(path)],
+            [
+                "ffplay",
+                "-nodisp",
+                "-autoexit",
+                "-loglevel",
+                "error",
+                "-ss",
+                str(max(0.0, start)),
+                str(path),
+            ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -167,7 +176,11 @@ class MusicBrowser:
             return
 
         directories = sorted(
-            (path for path in children if path.is_dir() and not path.name.startswith(".")),
+            (
+                path
+                for path in children
+                if path.is_dir() and not path.name.startswith(".")
+            ),
             key=lambda path: path.name.casefold(),
         )
         mp3s = sorted(
@@ -180,8 +193,16 @@ class MusicBrowser:
             ),
             key=lambda path: path.name.casefold(),
         )
-        parent = [Entry(self.directory.parent, "parent")] if self.directory.parent != self.directory else []
-        self.entries = parent + [Entry(path, "directory") for path in directories] + [Entry(path, "file") for path in mp3s]
+        parent = (
+            [Entry(self.directory.parent, "parent")]
+            if self.directory.parent != self.directory
+            else []
+        )
+        self.entries = (
+            parent
+            + [Entry(path, "directory") for path in directories]
+            + [Entry(path, "file") for path in mp3s]
+        )
         self.metadata_paths = [
             path for path in mp3s if self.player.cached_track_info(path) is None
         ]
@@ -204,10 +225,14 @@ class MusicBrowser:
 
     def current_position(self) -> float:
         if self.playing:
-            return max(0.0, self.position_seconds + time.monotonic() - self.play_started_at)
+            return max(
+                0.0, self.position_seconds + time.monotonic() - self.play_started_at
+            )
         return self.position_seconds
 
-    def play_file(self, path: Path, start: float = INITIAL_PLAYBACK_OFFSET_SECONDS) -> None:
+    def play_file(
+        self, path: Path, start: float = INITIAL_PLAYBACK_OFFSET_SECONDS
+    ) -> None:
         try:
             self.player.play(path, start)
         except (OSError, RuntimeError) as exc:
@@ -276,7 +301,11 @@ class MusicBrowser:
                 continue
             info = self.player.cached_track_info(entry.path)
             searchable_text = " ".join(
-                (entry.path.name, info.artist if info else "", info.title if info else "")
+                (
+                    entry.path.name,
+                    info.artist if info else "",
+                    info.title if info else "",
+                )
             ).casefold()
             if normalized_query in searchable_text:
                 matches.append(entry)
@@ -344,11 +373,15 @@ class MusicBrowser:
 
         self.playing = False
         duration = self.player.duration(self.current_file)
-        self.position_seconds = duration if duration is not None else self.current_position()
+        self.position_seconds = (
+            duration if duration is not None else self.current_position()
+        )
         self.status = "Finished: last MP3 in this directory"
 
 
-def add_text(screen: curses.window, row: int, text: str, width: int, style: int = 0) -> None:
+def add_text(
+    screen: curses.window, row: int, text: str, width: int, style: int = 0
+) -> None:
     """Draw text without crashing if curses rejects the terminal's last cell."""
     try:
         screen.addnstr(row, 0, text, max(0, width - 1), style)
@@ -386,7 +419,7 @@ def truncate_text(text: str, width: int) -> str:
         return text
     if width == 1:
         return "…"
-    return f"{text[:width - 1]}…"
+    return f"{text[: width - 1]}…"
 
 
 def table_column_widths(width: int) -> tuple[int, int, int, int]:
@@ -399,7 +432,9 @@ def table_column_widths(width: int) -> tuple[int, int, int, int]:
     return filename_width, artist_width, title_width, duration_width
 
 
-def table_row(entry: Entry, player: AudioPlayer, widths: tuple[int, int, int, int]) -> str:
+def table_row(
+    entry: Entry, player: AudioPlayer, widths: tuple[int, int, int, int]
+) -> str:
     """Format a browser entry as a filename, artist, title, and duration row."""
     filename_width, artist_width, title_width, duration_width = widths
     if entry.kind == "file":
@@ -407,7 +442,11 @@ def table_row(entry: Entry, player: AudioPlayer, widths: tuple[int, int, int, in
         filename = entry.path.name
         artist = info.artist if info is not None else ""
         title = info.title if info is not None else ""
-        duration = format_duration(info.duration) if info is not None and info.duration is not None else "—"
+        duration = (
+            format_duration(info.duration)
+            if info is not None and info.duration is not None
+            else "—"
+        )
     else:
         filename = entry.label
         artist = ""
@@ -430,11 +469,23 @@ def draw(
     screen.erase()
     height, width = screen.getmaxyx()
     add_text(screen, 0, f"Music Select — {browser.directory}", width, curses.A_BOLD)
-    add_text(screen, 1, "↑/↓ select & autoplay  Enter open folder/play  ←/→ seek 15s  Space pause  f find  d delete  q quit", width)
+    add_text(
+        screen,
+        1,
+        "↑/↓ select & autoplay  Enter open folder/play  ←/→ seek 15s  "
+        "Space pause  f find  d delete  q quit",
+        width,
+    )
     if browser.is_reading_metadata:
         completed, total = browser.metadata_progress
         spinner = "|/-\\"[completed % 4]
-        add_text(screen, 2, f"Reading metadata {spinner} {completed}/{total}", width, curses.A_BOLD)
+        add_text(
+            screen,
+            2,
+            f"Reading metadata {spinner} {completed}/{total}",
+            width,
+            curses.A_BOLD,
+        )
     else:
         try:
             screen.hline(2, 0, "-", max(0, width - 1))
@@ -461,20 +512,42 @@ def draw(
         displayed_selected = min(search_selected, max(0, len(displayed_entries) - 1))
 
     visible_rows = max(1, height - 6)
-    start = max(0, min(displayed_selected - visible_rows // 2, len(displayed_entries) - visible_rows))
-    for row, entry in enumerate(displayed_entries[start : start + visible_rows], start=5):
-        style = curses.A_REVERSE if start + row - 5 == displayed_selected else curses.A_NORMAL
-        add_text(screen, row, table_row(entry, browser.player, column_widths), width, style)
+    start = max(
+        0,
+        min(
+            displayed_selected - visible_rows // 2,
+            len(displayed_entries) - visible_rows,
+        ),
+    )
+    for row, entry in enumerate(
+        displayed_entries[start : start + visible_rows], start=5
+    ):
+        style = (
+            curses.A_REVERSE
+            if start + row - 5 == displayed_selected
+            else curses.A_NORMAL
+        )
+        add_text(
+            screen, row, table_row(entry, browser.player, column_widths), width, style
+        )
     if search_query is not None and not displayed_entries:
         add_text(screen, 5, "No matching MP3 files", width)
 
     position = browser.current_position()
-    now_playing = browser.current_file.name if browser.current_file else "Nothing playing"
+    now_playing = (
+        browser.current_file.name if browser.current_file else "Nothing playing"
+    )
     if search_query is not None:
         footer = f"Find file: {search_query}_  Up/Down choose  Enter play  Esc cancel"
     else:
-        duration = browser.player.duration(browser.current_file) if browser.current_file else None
-        total_time = format_duration(duration) if duration is not None else "unknown duration"
+        duration = (
+            browser.player.duration(browser.current_file)
+            if browser.current_file
+            else None
+        )
+        total_time = (
+            format_duration(duration) if duration is not None else "unknown duration"
+        )
         time_display = f"{format_duration(position)} / {total_time}"
         if browser.status == f"Playing: {now_playing}":
             footer = f"{browser.status} | {time_display}"
@@ -550,15 +623,27 @@ def run(screen: curses.window, start_dir: Path) -> None:
                 browser.open_selected()
             elif key == ord(" "):
                 browser.toggle_pause()
-            elif key in (ord("d"), ord("D")) and browser.entries and browser.entries[browser.selected].kind == "file":
+            elif (
+                key in (ord("d"), ord("D"))
+                and browser.entries
+                and browser.entries[browser.selected].kind == "file"
+            ):
                 browser.delete_selected()
     finally:
         player.close()
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Browse and play MP3 files in a terminal.")
-    parser.add_argument("directory", nargs="?", type=Path, default=Path.cwd(), help="initial directory (default: current directory)")
+    parser = argparse.ArgumentParser(
+        description="Browse and play MP3 files in a terminal."
+    )
+    parser.add_argument(
+        "directory",
+        nargs="?",
+        type=Path,
+        default=Path.cwd(),
+        help="initial directory (default: current directory)",
+    )
     args = parser.parse_args()
     if not args.directory.is_dir():
         raise SystemExit(f"Not a directory: {args.directory}")
