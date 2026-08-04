@@ -39,8 +39,8 @@ python3 music_select.py /path/to/music
 
 | Key | Action |
 | --- | --- |
-| Up / Down | Move selection; selecting an MP3 starts it at 15 seconds |
-| Enter | Open the selected directory, go to the parent directory, or play the selected MP3 at 15 seconds |
+| Up / Down | Move selection; selecting an MP3 starts it from the beginning |
+| Enter | Open the selected directory, go to the parent directory, or play the selected MP3 from the beginning |
 | Left / Right | Seek backward / forward 15 seconds; forward seeking stops at the end of the file |
 | Space | Pause or resume playback |
 | f | Filter MP3s by filename, artist, or title; type a query, use Up / Down to choose a match, then press Enter to play it |

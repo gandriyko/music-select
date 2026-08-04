@@ -149,7 +149,6 @@ class AudioPlayer:
 
 class MusicBrowser:
     SEEK_SECONDS = 15
-    INITIAL_PLAYBACK_OFFSET_SECONDS = 15
 
     def __init__(self, start_dir: Path, player: AudioPlayer) -> None:
         self.player = player
@@ -230,9 +229,7 @@ class MusicBrowser:
             )
         return self.position_seconds
 
-    def play_file(
-        self, path: Path, start: float = INITIAL_PLAYBACK_OFFSET_SECONDS
-    ) -> None:
+    def play_file(self, path: Path, start: float = 0.0) -> None:
         try:
             self.player.play(path, start)
         except (OSError, RuntimeError) as exc:
