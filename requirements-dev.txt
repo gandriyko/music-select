@@ -1,0 +1,3 @@
+# Linting and formatting
+ruff
+pre-commit
