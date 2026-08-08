@@ -15,6 +15,7 @@ import shutil
 import signal
 import subprocess
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -121,17 +122,9 @@ class AudioPlayer:
             start_new_session=True,
         )
 
-    def pause(self) -> None:
-        if self.process is not None and self.process.poll() is None:
-            os.killpg(self.process.pid, signal.SIGSTOP)
-
-    def resume(self) -> None:
-        if self.process is not None and self.process.poll() is None:
-            os.killpg(self.process.pid, signal.SIGCONT)
-
     def stop(self) -> None:
         if self.process is not None and self.process.poll() is None:
-            # SIGKILL is needed if the user quits while the player is paused.
+            # Escalate if ffplay does not exit promptly during cleanup.
             os.killpg(self.process.pid, signal.SIGTERM)
             try:
                 self.process.wait(timeout=0.5)
@@ -256,14 +249,14 @@ class MusicBrowser:
             self.status = "Select an MP3 file to start playback"
         elif self.playing:
             self.position_seconds = self.current_position()
-            self.player.pause()
+            # Suspending ffplay interrupts its audio buffers, which is
+            # especially noticeable when the file is on removable storage.
+            # Stop cleanly and reopen at this position when playback resumes.
+            self.player.stop()
             self.playing = False
             self.status = "Paused"
         else:
-            self.player.resume()
-            self.play_started_at = time.monotonic()
-            self.playing = True
-            self.status = "Playing"
+            self.play_file(self.current_file, self.position_seconds)
 
     def seek(self, amount: int) -> None:
         if self.current_file is None:
@@ -274,11 +267,10 @@ class MusicBrowser:
         if duration is not None and target >= duration:
             self.status = f"End of file ({duration:.0f}s)"
             return
-        was_playing = self.playing
-        self.play_file(self.current_file, target)
-        if not was_playing and self.playing:
-            self.player.pause()
-            self.playing = False
+        if self.playing:
+            self.play_file(self.current_file, target)
+        else:
+            self.position_seconds = target
             self.status = f"Paused at {target:.0f}s"
 
     def move(self, amount: int) -> None:
@@ -381,7 +373,10 @@ def add_text(
 ) -> None:
     """Draw text without crashing if curses rejects the terminal's last cell."""
     try:
-        screen.addnstr(row, 0, text, max(0, width - 1), style)
+        # addnstr limits Python characters, not terminal cells.  A combining
+        # accent therefore consumed its limit without taking screen space and
+        # could clip the final character in a row (for example, "3:10").
+        screen.addstr(row, 0, truncate_text(text, max(0, width - 1)), style)
     except curses.error:
         # A resize between getmaxyx() and addnstr(), or a terminal's bottom-right
         # cell, may return ERR even when the visible text was drawn correctly.
@@ -412,11 +407,37 @@ def truncate_text(text: str, width: int) -> str:
     """Fit text inside a table cell, using an ellipsis when needed."""
     if width <= 0:
         return ""
-    if len(text) <= width:
+    if display_width(text) <= width:
         return text
     if width == 1:
         return "…"
-    return f"{text[: width - 1]}…"
+    truncated: list[str] = []
+    used_width = 0
+    for character in text:
+        character_width = display_width(character)
+        if used_width + character_width > width - 1:
+            break
+        truncated.append(character)
+        used_width += character_width
+    return f"{''.join(truncated)}…"
+
+
+def display_width(text: str) -> int:
+    """Return the number of terminal columns occupied by text."""
+    return sum(
+        0
+        if unicodedata.combining(character)
+        else 2
+        if unicodedata.east_asian_width(character) in {"W", "F"}
+        else 1
+        for character in text
+    )
+
+
+def pad_text(text: str, width: int, *, align_right: bool = False) -> str:
+    """Pad text to a terminal-column width rather than a character count."""
+    padding = " " * max(0, width - display_width(text))
+    return f"{padding}{text}" if align_right else f"{text}{padding}"
 
 
 def table_column_widths(width: int) -> tuple[int, int, int, int]:
@@ -450,10 +471,10 @@ def table_row(
         title = ""
         duration = ""
     return (
-        f"{truncate_text(filename, filename_width):<{filename_width}} "
-        f"{truncate_text(artist, artist_width):<{artist_width}} "
-        f"{truncate_text(title, title_width):<{title_width}} "
-        f"{duration:>{duration_width}}"
+        f"{pad_text(truncate_text(filename, filename_width), filename_width)} "
+        f"{pad_text(truncate_text(artist, artist_width), artist_width)} "
+        f"{pad_text(truncate_text(title, title_width), title_width)} "
+        f"{pad_text(duration, duration_width, align_right=True)}"
     )
 
 
