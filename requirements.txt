@@ -1,2 +1,0 @@
-# No Python packages are required.
-# Music Select uses the ffplay command supplied by FFmpeg.
