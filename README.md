@@ -7,7 +7,7 @@ AppleDouble metadata files created by macOS, such as `._song.mp3`, are ignored.
 ## Install and run
 
 ```bash
-python3 music_select.py
+./mp3s
 ```
 
 Music Select requires `ffplay`, supplied by FFmpeg. Install FFmpeg on macOS:
@@ -21,18 +21,18 @@ duration columns. Artist and title are read from the MP3 tags by `ffprobe`;
 untagged files leave those columns empty. A spinner and count are shown while
 metadata for the current folder is being read.
 
-To make the `music_select` command use the latest project version after an
+To make the `mp3s` command use the latest project version after an
 update, copy the script to your local bin directory:
 
 ```bash
-cp music_select.py ~/.local/bin/music_select
-chmod +x ~/.local/bin/music_select
+cp mp3s ~/.local/bin/mp3s
+chmod +x ~/.local/bin/mp3s
 ```
 
 You can start in a specific directory instead:
 
 ```bash
-python3 music_select.py /path/to/music
+./mp3s /path/to/music
 ```
 
 ## Controls

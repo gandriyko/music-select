@@ -2,7 +2,7 @@
 """A keyboard-driven terminal browser and MP3 player.
 
 Run from the directory you want to browse:
-    python3 music_select.py
+    ./mp3s
 """
 
 from __future__ import annotations
