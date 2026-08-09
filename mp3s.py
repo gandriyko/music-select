@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""A keyboard-driven terminal browser and MP3 player.
+"""A terminal browser and MP3 player.
 
 Run from the directory you want to browse:
-    ./mp3s
+    ./mp3s.py
 """
 
 from __future__ import annotations
@@ -478,11 +478,22 @@ def table_row(
     )
 
 
+def list_view_start(
+    entry_count: int, selected: int, height: int, requested_start: int | None = None
+) -> int:
+    """Return a valid first entry index for the visible list rows."""
+    visible_rows = max(1, height - 6)
+    if requested_start is None:
+        requested_start = selected - visible_rows // 2
+    return max(0, min(requested_start, entry_count - visible_rows))
+
+
 def draw(
     screen: curses.window,
     browser: MusicBrowser,
     search_query: str | None = None,
     search_selected: int = 0,
+    list_start: int | None = None,
 ) -> None:
     screen.erase()
     height, width = screen.getmaxyx()
@@ -530,12 +541,8 @@ def draw(
         displayed_selected = min(search_selected, max(0, len(displayed_entries) - 1))
 
     visible_rows = max(1, height - 6)
-    start = max(
-        0,
-        min(
-            displayed_selected - visible_rows // 2,
-            len(displayed_entries) - visible_rows,
-        ),
+    start = list_view_start(
+        len(displayed_entries), displayed_selected, height, list_start
     )
     for row, entry in enumerate(
         displayed_entries[start : start + visible_rows], start=5
@@ -583,7 +590,13 @@ def draw(
 def run(screen: curses.window, start_dir: Path) -> None:
     curses.curs_set(0)
     screen.keypad(True)
+    curses.mousemask(curses.ALL_MOUSE_EVENTS)
     screen.timeout(200)
+    wheel_up = getattr(curses, "BUTTON4_PRESSED", 0)
+    wheel_down = getattr(curses, "BUTTON5_PRESSED", 0)
+    # On the macOS curses build, button five is not exposed. Its event bits
+    # overlap these modifier constants instead.
+    wheel_down_fallback = curses.BUTTON_CTRL | curses.BUTTON_SHIFT | curses.BUTTON_ALT
     try:
         player = AudioPlayer()
     except RuntimeError as exc:
@@ -591,14 +604,97 @@ def run(screen: curses.window, start_dir: Path) -> None:
     browser = MusicBrowser(start_dir, player)
     search_query: str | None = None
     search_selected = 0
+    list_start: int | None = None
     try:
         while True:
             browser.play_next_when_finished()
-            draw(screen, browser, search_query, search_selected)
+            draw(screen, browser, search_query, search_selected, list_start)
             screen.timeout(0 if browser.is_reading_metadata else 200)
             key = screen.getch()
             if key == -1:
                 browser.read_next_track_info()
+                continue
+            if key == curses.KEY_MOUSE:
+                try:
+                    _, mouse_x, mouse_y, _, mouse_state = curses.getmouse()
+                except curses.error:
+                    # Apple's four-button ncurses recognizes an xterm
+                    # wheel-down sequence as KEY_MOUSE but cannot represent
+                    # button five in MEVENT, so getmouse() returns ERR.
+                    # Preserve it as the otherwise-unused zero-state fallback.
+                    mouse_x = mouse_y = -1
+                    mouse_state = 0
+
+                left_click = bool(
+                    mouse_state
+                    & (curses.BUTTON1_CLICKED | curses.BUTTON1_DOUBLE_CLICKED)
+                )
+                # Give a click priority over wheel detection.  Some curses
+                # builds expose no distinct BUTTON5_PRESSED mask, so their
+                # fallback wheel state must never make a table click scroll.
+                wheel_scrolled_up = not left_click and bool(
+                    wheel_up and mouse_state & wheel_up
+                )
+                wheel_scrolled_down = not left_click and bool(
+                    wheel_down and mouse_state & wheel_down
+                )
+                if not left_click and not wheel_down:
+                    # This curses build reserves only four button groups. Its
+                    # fifth-button wheel mask aliases modifier masks. Include
+                    # every aliased event kind: different terminals report a
+                    # wheel-down action as pressed, released, or clicked.
+                    wheel_scrolled_down = (
+                        bool(mouse_state & wheel_down_fallback) or mouse_state == 0
+                    )
+                if wheel_scrolled_up or wheel_scrolled_down:
+                    if search_query is None:
+                        displayed_entries = browser.entries
+                        displayed_selected = browser.selected
+                    else:
+                        displayed_entries = browser.matching_files(search_query)
+                        displayed_selected = search_selected
+                    height, _ = screen.getmaxyx()
+                    current_start = list_view_start(
+                        len(displayed_entries), displayed_selected, height, list_start
+                    )
+                    direction = -1 if wheel_scrolled_up else 1
+                    list_start = max(
+                        0,
+                        min(
+                            current_start + direction * 3,
+                            len(displayed_entries) - max(1, height - 6),
+                        ),
+                    )
+                    continue
+                if not left_click:
+                    continue
+
+                height, width = screen.getmaxyx()
+                if mouse_x < 0 or mouse_x >= width or not 5 <= mouse_y < height - 1:
+                    continue
+                if search_query is None:
+                    displayed_entries = browser.entries
+                    displayed_selected = browser.selected
+                else:
+                    displayed_entries = browser.matching_files(search_query)
+                    displayed_selected = min(
+                        search_selected, max(0, len(displayed_entries) - 1)
+                    )
+                start = list_view_start(
+                    len(displayed_entries), displayed_selected, height, list_start
+                )
+                clicked_index = start + mouse_y - 5
+                if clicked_index >= len(displayed_entries):
+                    continue
+                clicked_entry = displayed_entries[clicked_index]
+                if search_query is None:
+                    browser.selected = clicked_index
+                    browser.open_selected()
+                    if clicked_entry.kind in {"parent", "directory"}:
+                        list_start = 0
+                else:
+                    browser.select_file(clicked_entry.path)
+                    search_query = None
                 continue
             if search_query is not None:
                 if key == 27:
@@ -613,26 +709,33 @@ def run(screen: curses.window, start_dir: Path) -> None:
                     search_query = None
                 elif key == curses.KEY_UP:
                     search_selected = max(0, search_selected - 1)
+                    list_start = None
                 elif key == curses.KEY_DOWN:
                     matches = browser.matching_files(search_query)
                     search_selected = min(max(0, len(matches) - 1), search_selected + 1)
+                    list_start = None
                 elif key in (curses.KEY_BACKSPACE, 8, 127):
                     search_query = search_query[:-1]
                     search_selected = 0
+                    list_start = None
                 elif 32 <= key <= 126:
                     search_query += chr(key)
                     search_selected = 0
+                    list_start = None
                 continue
             if key in (ord("q"), 27):
                 return
             if key in (ord("f"), ord("F")):
                 search_query = ""
                 search_selected = 0
+                list_start = None
                 continue
             if key == curses.KEY_UP:
                 browser.move(-1)
+                list_start = None
             elif key == curses.KEY_DOWN:
                 browser.move(1)
+                list_start = None
             elif key == curses.KEY_LEFT:
                 browser.seek(-browser.SEEK_SECONDS)
             elif key == curses.KEY_RIGHT:

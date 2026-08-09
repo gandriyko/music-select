@@ -7,7 +7,7 @@ AppleDouble metadata files created by macOS, such as `._song.mp3`, are ignored.
 ## Install and run
 
 ```bash
-./mp3s
+./mp3s.py
 ```
 
 Music Select requires `ffplay`, supplied by FFmpeg. Install FFmpeg on macOS:
@@ -25,19 +25,19 @@ To make the `mp3s` command use the latest project version after an
 update, copy the script to your local bin directory:
 
 ```bash
-cp mp3s ~/.local/bin/mp3s
+cp mp3s.py ~/.local/bin/mp3s
 chmod +x ~/.local/bin/mp3s
 ```
 
 You can start in a specific directory instead:
 
 ```bash
-./mp3s /path/to/music
+./mp3s.py /path/to/music
 ```
 
 ## Controls
 
-| Key | Action |
+| Input | Action |
 | --- | --- |
 | Up / Down | Move selection; selecting an MP3 starts it from the beginning |
 | Enter | Open the selected directory, go to the parent directory, or play the selected MP3 from the beginning |
@@ -46,6 +46,8 @@ You can start in a specific directory instead:
 | f | Filter MP3s by filename, artist, or title; type a query, use Up / Down to choose a match, then press Enter to play it |
 | d | Delete the selected MP3 immediately, then select and play the next file (or previous file if it was last) |
 | q or Esc | Quit |
+| Left click | Open a directory, navigate to the parent directory, or play an MP3 |
+| Mouse wheel | Scroll the file list without changing the selection or playback |
 
 The footer shows the currently selected track's elapsed time, total duration,
 and a live progress bar. If FFmpeg cannot determine a file's duration, the
