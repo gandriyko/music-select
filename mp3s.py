@@ -502,7 +502,7 @@ def draw(
         screen,
         1,
         "↑/↓ select & autoplay  Enter open folder/play  ←/→ seek 15s  "
-        "Space pause  f find  d delete  q quit",
+        "Space/right-click pause  f find  dd delete  q quit",
         width,
     )
     if browser.is_reading_metadata:
@@ -605,6 +605,7 @@ def run(screen: curses.window, start_dir: Path) -> None:
     search_query: str | None = None
     search_selected = 0
     list_start: int | None = None
+    delete_pending_path: Path | None = None
     try:
         while True:
             browser.play_next_when_finished()
@@ -614,6 +615,8 @@ def run(screen: curses.window, start_dir: Path) -> None:
             if key == -1:
                 browser.read_next_track_info()
                 continue
+            if key not in (ord("d"), ord("D")):
+                delete_pending_path = None
             if key == curses.KEY_MOUSE:
                 try:
                     _, mouse_x, mouse_y, _, mouse_state = curses.getmouse()
@@ -629,6 +632,13 @@ def run(screen: curses.window, start_dir: Path) -> None:
                     mouse_state
                     & (curses.BUTTON1_CLICKED | curses.BUTTON1_DOUBLE_CLICKED)
                 )
+                right_click = bool(
+                    mouse_state
+                    & (curses.BUTTON3_CLICKED | curses.BUTTON3_DOUBLE_CLICKED)
+                )
+                if right_click:
+                    browser.toggle_pause()
+                    continue
                 # Give a click priority over wheel detection.  Some curses
                 # builds expose no distinct BUTTON5_PRESSED mask, so their
                 # fallback wheel state must never make a table click scroll.
@@ -749,7 +759,13 @@ def run(screen: curses.window, start_dir: Path) -> None:
                 and browser.entries
                 and browser.entries[browser.selected].kind == "file"
             ):
-                browser.delete_selected()
+                selected_path = browser.entries[browser.selected].path
+                if delete_pending_path == selected_path:
+                    browser.delete_selected()
+                    delete_pending_path = None
+                else:
+                    delete_pending_path = selected_path
+                    browser.status = f"Press d again to delete: {selected_path.name}"
     finally:
         player.close()
 

@@ -43,8 +43,9 @@ You can start in a specific directory instead:
 | Enter | Open the selected directory, go to the parent directory, or play the selected MP3 from the beginning |
 | Left / Right | Seek backward / forward 15 seconds; forward seeking stops at the end of the file |
 | Space | Pause or resume playback |
+| Right click | Pause or resume playback without changing the selection |
 | f | Filter MP3s by filename, artist, or title; type a query, use Up / Down to choose a match, then press Enter to play it |
-| d | Delete the selected MP3 immediately, then select and play the next file (or previous file if it was last) |
+| d then d | Delete the selected MP3, then select and play the next file (or previous file if it was last) |
 | q or Esc | Quit |
 | Left click | Open a directory, navigate to the parent directory, or play an MP3 |
 | Mouse wheel | Scroll the file list without changing the selection or playback |
