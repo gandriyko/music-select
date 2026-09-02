@@ -44,6 +44,7 @@ You can start in a specific directory instead:
 | Left / Right | Seek backward / forward 15 seconds; forward seeking stops at the end of the file |
 | Space | Pause or resume playback |
 | Right click | Pause or resume playback without changing the selection |
+| c | Turn continuous playback on or off |
 | f | Filter MP3s by filename, artist, or title; type a query, use Up / Down to choose a match, then press Enter to play it |
 | d then d | Delete the selected MP3, then select and play the next file (or previous file if it was last) |
 | q or Esc | Quit |
@@ -54,7 +55,10 @@ The footer shows the currently selected track's elapsed time, total duration,
 and a live progress bar. If FFmpeg cannot determine a file's duration, the
 elapsed time is shown and the total is reported as unknown.
 
-When a track finishes, the next MP3 in the current directory is selected and
-played automatically. Playback stops after the final MP3; it does not loop back
-to the first file. Only direct `.mp3` files in the displayed directory are
-listed; use the directory entries to browse subdirectories or the parent directory.
+Continuous playback is on by default, and its current state is shown in the top
+panel. Press `c` to toggle it. When it is on and a track finishes, the next MP3
+in the current directory is selected and played automatically. When it is off,
+playback stops after the current track. In continuous mode, finishing the final
+MP3 starts the first MP3 again, so playback continues in a loop. Only direct
+`.mp3` files in the displayed directory are listed; use the directory entries
+to browse subdirectories or the parent directory.

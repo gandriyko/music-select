@@ -150,6 +150,7 @@ class MusicBrowser:
         self.selected = 0
         self.current_file: Path | None = None
         self.playing = False
+        self.continuous_playback = True
         self.position_seconds = 0.0
         self.play_started_at = 0.0
         self.status = ""
@@ -258,6 +259,11 @@ class MusicBrowser:
         else:
             self.play_file(self.current_file, self.position_seconds)
 
+    def toggle_continuous_playback(self) -> None:
+        self.continuous_playback = not self.continuous_playback
+        state = "ON" if self.continuous_playback else "OFF"
+        self.status = f"Continuous playback: {state}"
+
     def seek(self, amount: int) -> None:
         if self.current_file is None:
             self.status = "Select an MP3 file to seek"
@@ -341,23 +347,29 @@ class MusicBrowser:
             self.play_file(self.entries[self.selected].path)
 
     def play_next_when_finished(self) -> None:
-        """Advance after ffplay exits naturally, without looping at the end."""
+        """Advance after ffplay exits naturally when continuous play is on."""
         if not self.playing or self.player.is_running() or self.current_file is None:
             return
 
-        current_index = next(
-            (
-                index
-                for index, entry in enumerate(self.entries)
-                if entry.kind == "file" and entry.path == self.current_file
-            ),
-            None,
-        )
-        if current_index is not None:
-            for index in range(current_index + 1, len(self.entries)):
-                if self.entries[index].kind == "file":
+        if self.continuous_playback:
+            current_index = next(
+                (
+                    index
+                    for index, entry in enumerate(self.entries)
+                    if entry.kind == "file" and entry.path == self.current_file
+                ),
+                None,
+            )
+            if current_index is not None:
+                for index in range(current_index + 1, len(self.entries)):
+                    if self.entries[index].kind == "file":
+                        self.selected = index
+                        self.play_file(self.entries[index].path)
+                        return
+            for index, entry in enumerate(self.entries):
+                if entry.kind == "file":
                     self.selected = index
-                    self.play_file(self.entries[index].path)
+                    self.play_file(entry.path)
                     return
 
         self.playing = False
@@ -365,7 +377,10 @@ class MusicBrowser:
         self.position_seconds = (
             duration if duration is not None else self.current_position()
         )
-        self.status = "Finished: last MP3 in this directory"
+        if self.continuous_playback:
+            self.status = "Finished: no MP3 files in this directory"
+        else:
+            self.status = f"Finished: {self.current_file.name}"
 
 
 def add_text(
@@ -501,6 +516,7 @@ def draw(
     add_text(
         screen,
         1,
+        f"c continuous:{'ON' if browser.continuous_playback else 'OFF'}  "
         "↑/↓ select & autoplay  Enter open folder/play  ←/→ seek 15s  "
         "Space/right-click pause  f find  dd delete  q quit",
         width,
@@ -754,6 +770,8 @@ def run(screen: curses.window, start_dir: Path) -> None:
                 browser.open_selected()
             elif key == ord(" "):
                 browser.toggle_pause()
+            elif key in (ord("c"), ord("C")):
+                browser.toggle_continuous_playback()
             elif (
                 key in (ord("d"), ord("D"))
                 and browser.entries
