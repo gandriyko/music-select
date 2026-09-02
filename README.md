@@ -45,6 +45,7 @@ You can start in a specific directory instead:
 | Space | Pause or resume playback |
 | Right click | Pause or resume playback without changing the selection |
 | c | Turn continuous playback on or off |
+| v | Show or hide the volume spectrum; hiding it also stops the analyzer |
 | f | Filter MP3s by filename, artist, or title; type a query, use Up / Down to choose a match, then press Enter to play it |
 | d then d | Delete the selected MP3, then select and play the next file (or previous file if it was last) |
 | q or Esc | Quit |
@@ -54,6 +55,16 @@ You can start in a specific directory instead:
 The footer shows the currently selected track's elapsed time, total duration,
 and a live progress bar. If FFmpeg cannot determine a file's duration, the
 elapsed time is shown and the total is reported as unknown.
+
+A live shared volume spectrum above the footer shows vertical frequency columns
+from bass on the left to treble on the right. A parallel `ffmpeg` analyzer
+overlays both audio channels and starts, stops, pauses, and seeks with `ffplay`.
+The spectrum uses fewer, wider bars without vertical gaps, updates responsively,
+occupies up to six terminal rows, and shrinks when the terminal is low. Press
+`v` to hide it and return its rows to the file table; press `v` again to resume
+it from the current playback position. Adjacent bars alternate bright white and
+gray treatments; terminals without color support additionally distinguish them
+with alternating `█` and `▓` textures.
 
 Continuous playback is on by default, and its current state is shown in the top
 panel. Press `c` to toggle it. When it is on and a track finishes, the next MP3

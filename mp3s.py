@@ -14,6 +14,7 @@ import os
 import shutil
 import signal
 import subprocess
+import threading
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -44,11 +45,144 @@ class TrackInfo:
     duration: float | None = None
 
 
+class AudioAnalyzer:
+    """Read a shared real-time frequency spectrum from a parallel ffmpeg process."""
+
+    FRAME_WIDTH = 256
+    FRAME_HEIGHT = 32
+    FRAME_RATE = 24
+    FALL_PER_SECOND = 3.0
+    FILTER = (
+        f"[0:a]showfreqs=s={FRAME_WIDTH}x{FRAME_HEIGHT}:r={FRAME_RATE}:"
+        "mode=bar:ascale=log:fscale=log:win_size=2048:overlap=0.75:"
+        "averaging=1:colors=white:cmode=combined,format=gray[spectrum]"
+    )
+
+    def __init__(self) -> None:
+        self.process: subprocess.Popen[bytes] | None = None
+        self._spectrum: tuple[float, ...] = ()
+        self._updated_at = 0.0
+        self._generation = 0
+        self._lock = threading.Lock()
+
+    def start(self, path: Path, start: float) -> None:
+        self.stop()
+        if not shutil.which("ffmpeg"):
+            return
+        try:
+            process = subprocess.Popen(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-hide_banner",
+                    "-nostats",
+                    "-loglevel",
+                    "error",
+                    "-re",
+                    "-ss",
+                    str(max(0.0, start)),
+                    "-i",
+                    str(path),
+                    "-vn",
+                    "-filter_complex",
+                    self.FILTER,
+                    "-map",
+                    "[spectrum]",
+                    "-pix_fmt",
+                    "gray",
+                    "-f",
+                    "rawvideo",
+                    "-",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError:
+            return
+
+        with self._lock:
+            self._generation += 1
+            generation = self._generation
+            self.process = process
+            self._spectrum = ()
+            self._updated_at = 0.0
+        threading.Thread(
+            target=self._read_spectrum,
+            args=(process, generation),
+            daemon=True,
+        ).start()
+
+    def _read_spectrum(self, process: subprocess.Popen[bytes], generation: int) -> None:
+        if process.stdout is None:
+            return
+        frame_size = self.FRAME_WIDTH * self.FRAME_HEIGHT
+        try:
+            while frame := process.stdout.read(frame_size):
+                if len(frame) < frame_size:
+                    break
+                spectrum = tuple(
+                    sum(
+                        frame[row * self.FRAME_WIDTH + column] > 0
+                        for row in range(self.FRAME_HEIGHT)
+                    )
+                    / self.FRAME_HEIGHT
+                    for column in range(self.FRAME_WIDTH)
+                )
+                now = time.monotonic()
+                with self._lock:
+                    if generation != self._generation:
+                        return
+                    elapsed = now - self._updated_at
+                    if self._spectrum:
+                        spectrum = tuple(
+                            max(current, previous - self.FALL_PER_SECOND * elapsed)
+                            for current, previous in zip(spectrum, self._spectrum)
+                        )
+                    self._spectrum = spectrum
+                    self._updated_at = now
+        finally:
+            process.stdout.close()
+            process.wait()
+            with self._lock:
+                if generation == self._generation:
+                    self.process = None
+                    self._spectrum = ()
+
+    def spectrum(self) -> tuple[float, ...]:
+        with self._lock:
+            return self._spectrum
+
+    def stop(self) -> None:
+        with self._lock:
+            process = self.process
+            self.process = None
+            self._generation += 1
+            self._spectrum = ()
+        if process is None or process.poll() is not None:
+            return
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        try:
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+
+
 class AudioPlayer:
     """Play MP3 files through ffplay."""
 
     def __init__(self) -> None:
         self.process: subprocess.Popen[bytes] | None = None
+        self.analyzer = AudioAnalyzer()
+        self.spectrum_enabled = True
         self.track_info_cache: dict[Path, TrackInfo] = {}
         self.backend = "ffplay"
         if not shutil.which("ffplay"):
@@ -121,6 +255,8 @@ class AudioPlayer:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        if self.spectrum_enabled:
+            self.analyzer.start(path, start)
 
     def stop(self) -> None:
         if self.process is not None and self.process.poll() is None:
@@ -132,9 +268,21 @@ class AudioPlayer:
                 os.killpg(self.process.pid, signal.SIGKILL)
                 self.process.wait()
         self.process = None
+        self.analyzer.stop()
 
     def is_running(self) -> bool:
         return self.process is not None and self.process.poll() is None
+
+    def audio_spectrum(self) -> tuple[float, ...]:
+        return self.analyzer.spectrum()
+
+    def set_spectrum_enabled(
+        self, enabled: bool, path: Path | None = None, start: float = 0.0
+    ) -> None:
+        self.spectrum_enabled = enabled
+        self.analyzer.stop()
+        if enabled and path is not None:
+            self.analyzer.start(path, start)
 
     def close(self) -> None:
         self.stop()
@@ -263,6 +411,12 @@ class MusicBrowser:
         self.continuous_playback = not self.continuous_playback
         state = "ON" if self.continuous_playback else "OFF"
         self.status = f"Continuous playback: {state}"
+
+    def toggle_spectrum(self) -> None:
+        enabled = not self.player.spectrum_enabled
+        path = self.current_file if enabled and self.playing else None
+        self.player.set_spectrum_enabled(enabled, path, self.current_position())
+        self.status = f"Spectrum: {'ON' if enabled else 'OFF'}"
 
     def seek(self, amount: int) -> None:
         if self.current_file is None:
@@ -398,6 +552,40 @@ def add_text(
         pass
 
 
+def add_text_at(
+    screen: curses.window,
+    row: int,
+    column: int,
+    text: str,
+    width: int,
+    style: int = 0,
+) -> None:
+    """Draw a styled segment while preserving the terminal's final cell."""
+    try:
+        available = max(0, width - column - 1)
+        screen.addstr(row, column, truncate_text(text, available), style)
+    except curses.error:
+        pass
+
+
+def initialize_spectrum_colors() -> bool:
+    """Create a portable white/gray spectrum pair when colors are supported."""
+    if not curses.has_colors():
+        return False
+    try:
+        curses.start_color()
+        background = curses.COLOR_BLACK
+        try:
+            curses.use_default_colors()
+            background = -1
+        except curses.error:
+            pass
+        curses.init_pair(1, curses.COLOR_WHITE, background)
+    except curses.error:
+        return False
+    return True
+
+
 def format_duration(seconds: float) -> str:
     """Format a playback position as minutes and seconds."""
     whole_seconds = max(0, int(seconds))
@@ -416,6 +604,87 @@ def progress_bar(position: float, duration: float | None, width: int) -> str:
     bar_width = max(1, width - len(suffix) - 2)
     filled = min(bar_width, int(ratio * bar_width))
     return f"[{'#' * filled}{'-' * (bar_width - filled)}]{suffix}"
+
+
+def spectrum_meter_segments(
+    spectrum: tuple[float, ...], width: int, height: int
+) -> list[list[tuple[str, int]]]:
+    """Build gapless bar segments and retain each bar's frequency index."""
+    available = max(1, width - 1)
+    bar_count = max(1, min(32, available // 3))
+    bar_width, extra_columns = divmod(available, bar_count)
+    bar_widths = [bar_width + (bar < extra_columns) for bar in range(bar_count)]
+    if spectrum:
+        bars = []
+        for bar in range(bar_count):
+            start = bar * len(spectrum) // bar_count
+            end = max(start + 1, (bar + 1) * len(spectrum) // bar_count)
+            bars.append(max(spectrum[start:end]))
+    else:
+        bars = [0.0] * bar_count
+
+    partial_blocks = " ▁▂▃▄▅▆▇█"
+    lines: list[list[tuple[str, int]]] = []
+    for row in range(height):
+        segments = []
+        for bar, level in enumerate(bars):
+            eighths = round(max(0.0, min(1.0, level)) * height * 8)
+            cell_eighths = max(0, min(8, eighths - (height - row - 1) * 8))
+            if cell_eighths == 0 and row == height - 1:
+                cell = "·"
+            elif cell_eighths == 8 and bar % 2:
+                cell = "▓"
+            else:
+                cell = partial_blocks[cell_eighths]
+            segments.append((cell * bar_widths[bar], bar))
+        lines.append(segments)
+    return lines
+
+
+def spectrum_meter(spectrum: tuple[float, ...], width: int, height: int) -> list[str]:
+    """Render a monochrome shared spectrum with alternating bar textures."""
+    return [
+        "".join(text for text, _ in line)
+        for line in spectrum_meter_segments(spectrum, width, height)
+    ]
+
+
+def draw_spectrum_meter(
+    screen: curses.window,
+    row_start: int,
+    spectrum: tuple[float, ...],
+    width: int,
+    height: int,
+    colors_enabled: bool,
+) -> None:
+    """Draw adjacent bars in alternating white and gray treatments."""
+    lines = spectrum_meter_segments(spectrum, width, height)
+    for row, segments in enumerate(lines, start=row_start):
+        if not colors_enabled:
+            add_text(screen, row, "".join(text for text, _ in segments), width)
+            continue
+        column = 0
+        for text, bar in segments:
+            style = curses.color_pair(1)
+            if bar % 2 == 0:
+                style |= curses.A_BOLD
+            add_text_at(screen, row, column, text, width, style)
+            column += display_width(text)
+
+
+def spectrum_meter_height(terminal_height: int, visible: bool = True) -> int:
+    """Use up to six rows while preserving headers, footer, and table space."""
+    if not visible:
+        return 0
+    return max(1, min(6, terminal_height - 8))
+
+
+def visible_list_rows(terminal_height: int, spectrum_visible: bool = True) -> int:
+    """Return table rows remaining above the spectrum and footer."""
+    return max(
+        1,
+        terminal_height - spectrum_meter_height(terminal_height, spectrum_visible) - 6,
+    )
 
 
 def truncate_text(text: str, width: int) -> str:
@@ -494,10 +763,14 @@ def table_row(
 
 
 def list_view_start(
-    entry_count: int, selected: int, height: int, requested_start: int | None = None
+    entry_count: int,
+    selected: int,
+    height: int,
+    requested_start: int | None = None,
+    spectrum_visible: bool = True,
 ) -> int:
     """Return a valid first entry index for the visible list rows."""
-    visible_rows = max(1, height - 6)
+    visible_rows = visible_list_rows(height, spectrum_visible)
     if requested_start is None:
         requested_start = selected - visible_rows // 2
     return max(0, min(requested_start, entry_count - visible_rows))
@@ -509,6 +782,7 @@ def draw(
     search_query: str | None = None,
     search_selected: int = 0,
     list_start: int | None = None,
+    spectrum_colors: bool = False,
 ) -> None:
     screen.erase()
     height, width = screen.getmaxyx()
@@ -516,6 +790,7 @@ def draw(
     add_text(
         screen,
         1,
+        f"v spectrum:{'ON' if browser.player.spectrum_enabled else 'OFF'}  "
         f"c continuous:{'ON' if browser.continuous_playback else 'OFF'}  "
         "↑/↓ select & autoplay  Enter open folder/play  ←/→ seek 15s  "
         "Space/right-click pause  f find  dd delete  q quit",
@@ -556,9 +831,14 @@ def draw(
         displayed_entries = browser.matching_files(search_query)
         displayed_selected = min(search_selected, max(0, len(displayed_entries) - 1))
 
-    visible_rows = max(1, height - 6)
+    spectrum_visible = browser.player.spectrum_enabled
+    visible_rows = visible_list_rows(height, spectrum_visible)
     start = list_view_start(
-        len(displayed_entries), displayed_selected, height, list_start
+        len(displayed_entries),
+        displayed_selected,
+        height,
+        list_start,
+        spectrum_visible,
     )
     for row, entry in enumerate(
         displayed_entries[start : start + visible_rows], start=5
@@ -599,6 +879,17 @@ def draw(
             bar = progress_bar(position, duration, available_width)
             if bar:
                 footer += f" {bar}"
+    meter_height = spectrum_meter_height(height, spectrum_visible)
+    meter_start = height - meter_height - 1
+    if meter_height:
+        draw_spectrum_meter(
+            screen,
+            meter_start,
+            browser.player.audio_spectrum(),
+            width,
+            meter_height,
+            spectrum_colors,
+        )
     add_text(screen, height - 1, footer, width, curses.A_REVERSE)
     screen.refresh()
 
@@ -607,6 +898,7 @@ def run(screen: curses.window, start_dir: Path) -> None:
     curses.curs_set(0)
     screen.keypad(True)
     curses.mousemask(curses.ALL_MOUSE_EVENTS)
+    spectrum_colors = initialize_spectrum_colors()
     screen.timeout(200)
     wheel_up = getattr(curses, "BUTTON4_PRESSED", 0)
     wheel_down = getattr(curses, "BUTTON5_PRESSED", 0)
@@ -625,8 +917,16 @@ def run(screen: curses.window, start_dir: Path) -> None:
     try:
         while True:
             browser.play_next_when_finished()
-            draw(screen, browser, search_query, search_selected, list_start)
-            screen.timeout(0 if browser.is_reading_metadata else 200)
+            draw(
+                screen,
+                browser,
+                search_query,
+                search_selected,
+                list_start,
+                spectrum_colors,
+            )
+            refresh_ms = 50 if browser.playing and player.spectrum_enabled else 200
+            screen.timeout(0 if browser.is_reading_metadata else refresh_ms)
             key = screen.getch()
             if key == -1:
                 browser.read_next_track_info()
@@ -680,15 +980,21 @@ def run(screen: curses.window, start_dir: Path) -> None:
                         displayed_entries = browser.matching_files(search_query)
                         displayed_selected = search_selected
                     height, _ = screen.getmaxyx()
+                    spectrum_visible = player.spectrum_enabled
                     current_start = list_view_start(
-                        len(displayed_entries), displayed_selected, height, list_start
+                        len(displayed_entries),
+                        displayed_selected,
+                        height,
+                        list_start,
+                        spectrum_visible,
                     )
                     direction = -1 if wheel_scrolled_up else 1
                     list_start = max(
                         0,
                         min(
                             current_start + direction * 3,
-                            len(displayed_entries) - max(1, height - 6),
+                            len(displayed_entries)
+                            - visible_list_rows(height, spectrum_visible),
                         ),
                     )
                     continue
@@ -696,7 +1002,11 @@ def run(screen: curses.window, start_dir: Path) -> None:
                     continue
 
                 height, width = screen.getmaxyx()
-                if mouse_x < 0 or mouse_x >= width or not 5 <= mouse_y < height - 1:
+                spectrum_visible = player.spectrum_enabled
+                meter_start = (
+                    height - spectrum_meter_height(height, spectrum_visible) - 1
+                )
+                if mouse_x < 0 or mouse_x >= width or not 5 <= mouse_y < meter_start:
                     continue
                 if search_query is None:
                     displayed_entries = browser.entries
@@ -707,7 +1017,11 @@ def run(screen: curses.window, start_dir: Path) -> None:
                         search_selected, max(0, len(displayed_entries) - 1)
                     )
                 start = list_view_start(
-                    len(displayed_entries), displayed_selected, height, list_start
+                    len(displayed_entries),
+                    displayed_selected,
+                    height,
+                    list_start,
+                    spectrum_visible,
                 )
                 clicked_index = start + mouse_y - 5
                 if clicked_index >= len(displayed_entries):
@@ -772,6 +1086,9 @@ def run(screen: curses.window, start_dir: Path) -> None:
                 browser.toggle_pause()
             elif key in (ord("c"), ord("C")):
                 browser.toggle_continuous_playback()
+            elif key in (ord("v"), ord("V")):
+                browser.toggle_spectrum()
+                list_start = None
             elif (
                 key in (ord("d"), ord("D"))
                 and browser.entries
